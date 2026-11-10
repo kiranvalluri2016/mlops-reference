@@ -1,6 +1,10 @@
 from mlops_reference.pipeline import *
 from mlops_reference.tracking import track_and_register
 from mlops_reference.governance import Audit,operation_key,delayed_performance
+from mlops_reference.governance import Catalog,TrustedOperator
+from mlops_reference.lifecycle import Lifecycle
+from mlops_reference.monitoring import evaluate
+from mlops_reference.contracts import ChurnData,validate
 def test_deterministic_split_and_validation_only_gate():
     a,b=generate(),generate();assert a.fingerprint==b.fingerprint
     tr,val,test=split(a);m=train(tr);v=metrics(m,val); decision=promotion(v)
@@ -41,3 +45,18 @@ def test_schema_and_class_coverage_rejected():
     with pytest.raises(AssertionError):split(generate(n=40))
 def test_qualifying_candidate_passes_without_test_selection():
     tr,val,test=split(generate(seed=9,class_sep=3));model=train(tr);assert promotion(metrics(model,val))=='PROMOTION_APPROVED';assert len(test[0])==100
+def test_only_registered_promoted_tenant_candidate_can_deploy_and_trusted_rollback(tmp_path):
+    import pytest
+    life=Lifecycle(tmp_path);op=TrustedOperator('tenant-acme','ops',True)
+    with pytest.raises(PermissionError):life.deploy(op,'1')
+    life.catalog.register('tenant-acme','1','run1','lineage1');life.catalog.decide('tenant-acme','1','PROMOTION_APPROVED');life.deploy(op,'1')
+    life.catalog.register('tenant-acme','2','run2','lineage2');life.catalog.decide('tenant-acme','2','PROMOTION_APPROVED');life.deploy(op,'2')
+    with pytest.raises(PermissionError):life.rollback(TrustedOperator('tenant-acme','bad',False))
+    assert life.rollback(op)[0]['active_version']=='1'
+    with pytest.raises(PermissionError):life.deploy(TrustedOperator('tenant-other','ops',True),'2')
+def test_customer_contract_and_delayed_label_monitoring(tmp_path):
+    import pytest
+    data=generate();contract=ChurnData('tenant-acme',np.arange(len(data.y)),data.X,data.y,data.fingerprint);assert validate(contract)
+    with pytest.raises(ValueError):validate(ChurnData('tenant-acme',np.zeros(len(data.y)),data.X,data.y,data.fingerprint))
+    tr,val,test=split(data);model=train(tr);audit=Audit(tmp_path/'audit.db');report=evaluate('tenant-acme',model,tr[0],test,{'recall':.9},audit)
+    assert report['drift'] in {'HEALTHY','DRIFT_DETECTED'} and report['performance']=='ROLLBACK_REVIEW_REQUIRED' and audit.get(report['operation_key'])

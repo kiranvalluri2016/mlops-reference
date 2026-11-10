@@ -39,9 +39,14 @@ class Manifest:
             if expected_revision is not None and revision!=expected_revision: raise StaleManifest('manifest revision changed')
             record={**record,'revision':revision+1}
             fd,tmp=tempfile.mkstemp(dir=self.path.parent,prefix='.manifest-',text=True)
-            with os.fdopen(fd,'w') as f: json.dump(record,f,sort_keys=True);f.flush();os.fsync(f.fileno())
-            if inject_before_replace: raise RuntimeError('injected interruption before replace')
-            os.replace(tmp,self.path); fcntl.flock(lock,fcntl.LOCK_UN)
+            try:
+                with os.fdopen(fd,'w') as f: json.dump(record,f,sort_keys=True);f.flush();os.fsync(f.fileno())
+                if inject_before_replace: raise RuntimeError('injected interruption before replace')
+                os.replace(tmp,self.path)
+            except Exception:
+                if os.path.exists(tmp): os.unlink(tmp)
+                raise
+            finally: fcntl.flock(lock,fcntl.LOCK_UN)
         return record
     def deploy(self,tenant,version,key,expected_revision=None,inject_before_replace=False):
         old=self.read()
