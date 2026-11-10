@@ -6,7 +6,7 @@ import mlflow
 class Lifecycle:
  def __init__(self,root):
   self.audit=Audit(root/'audit.db');self.catalog=Catalog(root/'audit.db');self.manifest=Manifest(root/'deployment.json')
- def _verify_candidate(self,operator,version,active=None):
+ def _verify_candidate(self,operator,version,active=None,check_promotion=True):
   candidate=self.catalog.approved(operator.tenant_id,version)
   if not candidate: raise PermissionError('candidate is not registered and approved')
   mlflow.set_tracking_uri(f"sqlite:///{self.manifest.path.parent/'mlflow.db'}")
@@ -17,10 +17,12 @@ class Lifecycle:
   from .pipeline import promotion
   champion=None
   active=self.manifest.read().get('active_version') if active is None else active
-  if active:
+  if active and active!=version:
    prior=self.catalog.approved(operator.tenant_id,active)
-   if prior: champion=json.loads(prior[2])
-  if registered.run_id!=candidate[0] or run.data.tags.get('lineage')!=candidate[1] or dict(run.data.metrics)!=validation or promotion(validation,champion)!='PROMOTION_APPROVED': raise PermissionError('registry lineage or promotion mismatch')
+   if not prior: raise PermissionError('active champion authority missing')
+   self._verify_candidate(operator,active,'',False)
+   champion=json.loads(prior[2])
+  if registered.run_id!=candidate[0] or run.data.tags.get('lineage')!=candidate[1] or dict(run.data.metrics)!=validation or (check_promotion and promotion(validation,champion)!='PROMOTION_APPROVED'): raise PermissionError('registry lineage or promotion mismatch')
   return candidate
  def deploy(self,operator,version):
   self._verify_candidate(operator,version)
@@ -36,6 +38,6 @@ class Lifecycle:
   if not row or row[0]!='COMPLETED' or state.get('operation_key')!=key:return 'RECOVERY_REQUIRED'
   try:
    if state.get('tenant_id')!=operator.tenant_id: return 'RECOVERY_REQUIRED'
-   self._verify_candidate(operator,state['active_version'],state.get('previous_version'))
+   self._verify_candidate(operator,state['active_version'],state.get('previous_version'),self.audit.operation(key)!='ROLLBACK')
   except Exception:return 'RECOVERY_REQUIRED'
   return 'RECONCILED'

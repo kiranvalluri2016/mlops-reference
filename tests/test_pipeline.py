@@ -87,3 +87,20 @@ def test_customer_contract_and_delayed_label_monitoring(tmp_path):
     with pytest.raises(ValueError):validate(ChurnData('tenant-acme',np.zeros(len(data.y)),data.X,data.y,data.fingerprint))
     tr,val,test=split(data);model=train(tr);audit=Audit(tmp_path/'audit.db');report=evaluate('tenant-acme',model,tr[0],test,{'recall':.9},audit)
     assert report['drift'] in {'HEALTHY','DRIFT_DETECTED'} and report['performance']=='ROLLBACK_REVIEW_REQUIRED' and audit.get(report['operation_key'])
+def test_invalid_active_champion_blocks_qualified_candidate_deployment(tmp_path):
+    import pytest,sqlite3
+    life=Lifecycle(tmp_path);op=TrustedOperator('tenant-acme','ops',True);tr,val,_=split(generate(seed=9,class_sep=3))
+    run1,v1,_,m1=track_and_register(tmp_path,train(tr),val);life.catalog.register('tenant-acme',v1,run1,'dataset+pipeline',m1);life.deploy(op,v1)
+    before=life.manifest.read().copy();tr,val,_=split(generate(seed=11,class_sep=3));run2,v2,_,m2=track_and_register(tmp_path,train(tr),val);life.catalog.register('tenant-acme',v2,run2,'dataset+pipeline',m2)
+    c=sqlite3.connect(tmp_path/'audit.db');c.execute('DELETE FROM candidates WHERE tenant=? AND version=?',('tenant-acme',v1));c.commit();c.close()
+    with pytest.raises(PermissionError):life.deploy(op,v2)
+    assert life.manifest.read()==before
+    assert 'COMPLETED' not in life.audit.history(operation_key('tenant-acme','DEPLOY',v2,v1))
+def test_completed_rollback_reconciliation_is_read_only(tmp_path):
+    life=Lifecycle(tmp_path);op=TrustedOperator('tenant-acme','ops',True);versions=[]
+    for seed in (9,11):
+        tr,val,_=split(generate(seed=seed,class_sep=3));run,v,_,metric=track_and_register(tmp_path,train(tr),val);life.catalog.register('tenant-acme',v,run,'dataset+pipeline',metric);life.deploy(op,v);versions.append(v)
+    rolled,_=life.rollback(op);before=life.manifest.read().copy();key=before['operation_key'];history=life.audit.history(key)[:]
+    restarted=Lifecycle(tmp_path)
+    assert restarted.reconcile(op,key)=='RECONCILED'
+    assert restarted.manifest.read()==before and restarted.audit.history(key)==history and rolled['active_version']==versions[0]

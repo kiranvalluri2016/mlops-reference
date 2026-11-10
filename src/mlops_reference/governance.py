@@ -14,6 +14,8 @@ class Audit:
         conn=sqlite3.connect(self.path);row=conn.execute('SELECT status,detail FROM operations WHERE key=? ORDER BY event_id DESC LIMIT 1',(key,)).fetchone();conn.close();return row
     def history(self,key):
         conn=sqlite3.connect(self.path);rows=conn.execute('SELECT status FROM operations WHERE key=? ORDER BY event_id',(key,)).fetchall();conn.close();return [r[0] for r in rows]
+    def operation(self,key):
+        conn=sqlite3.connect(self.path);row=conn.execute('SELECT operation FROM operations WHERE key=? ORDER BY event_id DESC LIMIT 1',(key,)).fetchone();conn.close();return row[0] if row else None
 class TrustedOperator:
     """Local trusted context; callers cannot elevate with a boolean flag."""
     def __init__(self,tenant_id,operator_id,can_rollback=False): self.tenant_id=tenant_id;self.operator_id=operator_id;self.can_rollback=can_rollback
