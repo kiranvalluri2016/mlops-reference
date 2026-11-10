@@ -1,0 +1,16 @@
+[build-system]
+requires=["hatchling>=1.27,<2"]
+build-backend="hatchling.build"
+[project]
+name="mlops-reference"
+version="0.1.0"
+requires-python=">=3.12,<3.13"
+dependencies=["scikit-learn>=1.7,<1.10","mlflow>=3.0,<4","pydantic>=2.11,<3"]
+[project.scripts]
+mlops-reference="mlops_reference.cli:main"
+[dependency-groups]
+dev=["pytest>=8.3,<9"]
+[tool.hatch.build.targets.wheel]
+packages=["src/mlops_reference"]
+[tool.pytest.ini_options]
+testpaths=["tests"]
