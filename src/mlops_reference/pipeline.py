@@ -65,9 +65,9 @@ class Manifest:
             if old.get('operation_key')==key:return old,False
             record={'tenant_id':tenant,'active_version':old['previous_version'],'previous_version':old['active_version'],'operation_key':key}
             return self.write(record,expected_revision,locked=True),True
-    def reconcile(self,audit,key):
+    def reconcile(self,audit,key,registry_verified=False):
         row=audit.get(key); current=self.read()
-        if row and current.get('operation_key')==key:return 'RECONCILED'
+        if row and row[0]=='COMPLETED' and current.get('operation_key')==key and registry_verified:return 'RECONCILED'
         if row:return 'RECOVERY_REQUIRED'
         return 'NO_OPERATION'
 def drift(reference,current):

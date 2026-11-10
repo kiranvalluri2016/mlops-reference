@@ -39,7 +39,7 @@ def test_manifest_stale_write_interruption_and_reconciliation(tmp_path):
     assert m.read()['active_version']=='1'
     audit=Audit(tmp_path/'audit.db');audit.record('two','tenant-acme','DEPLOY','INTENT',{})
     assert m.reconcile(audit,'two')=='RECOVERY_REQUIRED'
-    m.deploy('tenant-acme','2','two',expected_revision=1); assert m.reconcile(audit,'two')=='RECONCILED'
+    audit.record('two','tenant-acme','DEPLOY','COMPLETED',{});m.deploy('tenant-acme','2','two',expected_revision=1); assert m.reconcile(audit,'two',True)=='RECONCILED'
 def test_concurrent_cross_tenant_manifest_write_is_rejected(tmp_path):
     from concurrent.futures import ThreadPoolExecutor
     import pytest
@@ -50,6 +50,11 @@ def test_concurrent_cross_tenant_manifest_write_is_rejected(tmp_path):
         good.result()
         with pytest.raises(PermissionError):bad.result()
     assert m.read()['tenant_id']=='tenant-acme'
+def test_reconciliation_requires_completed_audit_and_registry_authority(tmp_path):
+    m=Manifest(tmp_path/'deployment.json');m.deploy('tenant-acme','1','op');a=Audit(tmp_path/'audit.db');a.record('op','tenant-acme','DEPLOY','INTENT',{})
+    assert m.reconcile(a,'op',True)=='RECOVERY_REQUIRED'
+    a.record('op','tenant-acme','DEPLOY','COMPLETED',{})
+    assert m.reconcile(a,'op',False)=='RECOVERY_REQUIRED' and m.reconcile(a,'op',True)=='RECONCILED'
 def test_schema_and_class_coverage_rejected():
     import pytest
     with pytest.raises(AssertionError):split(generate(n=40))
@@ -61,10 +66,10 @@ def test_only_registered_promoted_tenant_candidate_can_deploy_and_trusted_rollba
     with pytest.raises(PermissionError):life.deploy(op,'1')
     tr,val,_=split(generate(seed=9,class_sep=3));run1,version1,_,validation1=track_and_register(tmp_path,train(tr),val)
     assert promotion(validation1)=='PROMOTION_APPROVED'
-    life.catalog.register('tenant-acme',version1,run1,'dataset+pipeline');life.catalog.decide('tenant-acme',version1,'PROMOTION_APPROVED');life.deploy(op,version1)
+    life.catalog.register('tenant-acme',version1,run1,'dataset+pipeline',validation1);life.deploy(op,version1)
     tr,val,_=split(generate(seed=11,class_sep=3));run2,version2,_,validation2=track_and_register(tmp_path,train(tr),val)
     assert promotion(validation2)=='PROMOTION_APPROVED'
-    life.catalog.register('tenant-acme',version2,run2,'dataset+pipeline');life.catalog.decide('tenant-acme',version2,'PROMOTION_APPROVED');life.deploy(op,version2)
+    life.catalog.register('tenant-acme',version2,run2,'dataset+pipeline',validation2);life.deploy(op,version2)
     with pytest.raises(PermissionError):life.rollback(TrustedOperator('tenant-acme','bad',False))
     assert life.rollback(op)[0]['active_version']==version1
     with pytest.raises(PermissionError):life.deploy(TrustedOperator('tenant-other','ops',True),version2)

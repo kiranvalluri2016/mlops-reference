@@ -22,13 +22,13 @@ def trusted_local_operator(tenant_id):
     return TrustedOperator(tenant_id,'trusted-local-operator',True)
 class Catalog:
     def __init__(self,path):
-        self.path=str(path);c=sqlite3.connect(self.path);c.execute('CREATE TABLE IF NOT EXISTS candidates (tenant TEXT,version TEXT,run_id TEXT,lineage TEXT,promotion TEXT,PRIMARY KEY(tenant,version))');c.commit();c.close()
-    def register(self,tenant,version,run_id,lineage):
+        self.path=str(path);c=sqlite3.connect(self.path);c.execute('CREATE TABLE IF NOT EXISTS candidates (tenant TEXT,version TEXT,run_id TEXT,lineage TEXT,promotion TEXT,validation TEXT,PRIMARY KEY(tenant,version))');c.commit();c.close()
+    def register(self,tenant,version,run_id,lineage,validation):
         if not all((tenant,version,run_id,lineage)): raise ValueError('complete lineage required')
-        c=sqlite3.connect(self.path);c.execute('INSERT OR REPLACE INTO candidates VALUES(?,?,?,?,?)',(tenant,version,run_id,lineage,'PENDING'));c.commit();c.close()
-    def decide(self,tenant,version,decision):
-        c=sqlite3.connect(self.path);c.execute('UPDATE candidates SET promotion=? WHERE tenant=? AND version=?',(decision,tenant,version));c.commit();c.close()
+        from .pipeline import promotion
+        decision=promotion(validation)
+        c=sqlite3.connect(self.path);c.execute('INSERT OR REPLACE INTO candidates VALUES(?,?,?,?,?,?)',(tenant,version,run_id,lineage,decision,json.dumps(validation,sort_keys=True)));c.commit();c.close();return decision
     def approved(self,tenant,version):
-        c=sqlite3.connect(self.path);r=c.execute('SELECT run_id,lineage FROM candidates WHERE tenant=? AND version=? AND promotion="PROMOTION_APPROVED"',(tenant,version)).fetchone();c.close();return r
+        c=sqlite3.connect(self.path);r=c.execute('SELECT run_id,lineage,validation FROM candidates WHERE tenant=? AND version=? AND promotion="PROMOTION_APPROVED"',(tenant,version)).fetchone();c.close();return r
 def delayed_performance(active,candidate):
     return 'ROLLBACK_REVIEW_REQUIRED' if candidate['recall']<active['recall']-.03 else 'HEALTHY'
