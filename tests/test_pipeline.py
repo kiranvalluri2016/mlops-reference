@@ -75,6 +75,9 @@ def test_only_registered_promoted_tenant_candidate_can_deploy_and_trusted_rollba
     tr,val,_=split(generate(seed=11,class_sep=3));run2,version2,_,validation2=track_and_register(tmp_path,train(tr),val)
     assert promotion(validation2)=='PROMOTION_APPROVED'
     life.catalog.register('tenant-acme',version2,run2,'dataset+pipeline',validation2);life.deploy(op,version2)
+    before=life.manifest.read().copy();history=life.audit.history(before['operation_key'])[:]
+    assert life.reconcile(op,before['operation_key'])=='RECONCILED'
+    assert life.manifest.read()==before and life.audit.history(before['operation_key'])==history
     with pytest.raises(PermissionError):life.rollback(TrustedOperator('tenant-acme','bad',False))
     assert life.rollback(op)[0]['active_version']==version1
     with pytest.raises(PermissionError):life.deploy(TrustedOperator('tenant-other','ops',True),version2)

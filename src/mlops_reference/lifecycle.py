@@ -6,7 +6,7 @@ import mlflow
 class Lifecycle:
  def __init__(self,root):
   self.audit=Audit(root/'audit.db');self.catalog=Catalog(root/'audit.db');self.manifest=Manifest(root/'deployment.json')
- def deploy(self,operator,version):
+ def _verify_candidate(self,operator,version,active=None):
   candidate=self.catalog.approved(operator.tenant_id,version)
   if not candidate: raise PermissionError('candidate is not registered and approved')
   mlflow.set_tracking_uri(f"sqlite:///{self.manifest.path.parent/'mlflow.db'}")
@@ -16,11 +16,14 @@ class Lifecycle:
   validation=json.loads(candidate[2])
   from .pipeline import promotion
   champion=None
-  active=self.manifest.read().get('active_version')
+  active=self.manifest.read().get('active_version') if active is None else active
   if active:
    prior=self.catalog.approved(operator.tenant_id,active)
    if prior: champion=json.loads(prior[2])
   if registered.run_id!=candidate[0] or run.data.tags.get('lineage')!=candidate[1] or dict(run.data.metrics)!=validation or promotion(validation,champion)!='PROMOTION_APPROVED': raise PermissionError('registry lineage or promotion mismatch')
+  return candidate
+ def deploy(self,operator,version):
+  self._verify_candidate(operator,version)
   prior=self.manifest.read().get('active_version');key=operation_key(operator.tenant_id,'DEPLOY',version,prior)
   self.audit.record(key,operator.tenant_id,'DEPLOY','INTENT',{'version':version,'prior':prior})
   record,created=self.manifest.deploy(operator.tenant_id,version,key);self.audit.record(key,operator.tenant_id,'DEPLOY','COMPLETED',record);return record,created
@@ -32,6 +35,7 @@ class Lifecycle:
   row=self.audit.get(key);state=self.manifest.read()
   if not row or row[0]!='COMPLETED' or state.get('operation_key')!=key:return 'RECOVERY_REQUIRED'
   try:
-   self.deploy(operator,state['active_version'])
+   if state.get('tenant_id')!=operator.tenant_id: return 'RECOVERY_REQUIRED'
+   self._verify_candidate(operator,state['active_version'],state.get('previous_version'))
   except Exception:return 'RECOVERY_REQUIRED'
   return 'RECONCILED'
