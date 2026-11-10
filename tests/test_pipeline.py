@@ -30,7 +30,7 @@ def test_mlflow_local_tracking_registration_and_loadback(tmp_path):
     assert run and version=='1' and loaded.predict(val[0][:2]).shape==(2,) and set(values)>={'roc_auc','recall','f1'}
 def test_audit_idempotency_and_delayed_performance_review(tmp_path):
     a=Audit(tmp_path/'audit.db');k=operation_key('tenant-acme','DEPLOY','2','1');a.record(k,'tenant-acme','DEPLOY','COMPLETED',{'version':'2'});a.record(k,'tenant-acme','DEPLOY','COMPLETED',{'version':'2'})
-    assert a.get(k)[0]=='COMPLETED';assert delayed_performance({'recall':.8},{'recall':.7})=='ROLLBACK_REVIEW_REQUIRED'
+    assert a.get(k)[0]=='COMPLETED' and a.history(k)==['COMPLETED','COMPLETED'];assert delayed_performance({'recall':.8},{'recall':.7})=='ROLLBACK_REVIEW_REQUIRED'
 def test_manifest_stale_write_interruption_and_reconciliation(tmp_path):
     import pytest
     m=Manifest(tmp_path/'deployment.json'); first,_=m.deploy('tenant-acme','1','one');
@@ -40,6 +40,16 @@ def test_manifest_stale_write_interruption_and_reconciliation(tmp_path):
     audit=Audit(tmp_path/'audit.db');audit.record('two','tenant-acme','DEPLOY','INTENT',{})
     assert m.reconcile(audit,'two')=='RECOVERY_REQUIRED'
     m.deploy('tenant-acme','2','two',expected_revision=1); assert m.reconcile(audit,'two')=='RECONCILED'
+def test_concurrent_cross_tenant_manifest_write_is_rejected(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+    import pytest
+    m=Manifest(tmp_path/'deployment.json');m.deploy('tenant-acme','1','initial')
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        good=pool.submit(m.deploy,'tenant-acme','2','good')
+        bad=pool.submit(m.deploy,'tenant-other','2','bad')
+        good.result()
+        with pytest.raises(PermissionError):bad.result()
+    assert m.read()['tenant_id']=='tenant-acme'
 def test_schema_and_class_coverage_rejected():
     import pytest
     with pytest.raises(AssertionError):split(generate(n=40))
@@ -49,11 +59,15 @@ def test_only_registered_promoted_tenant_candidate_can_deploy_and_trusted_rollba
     import pytest
     life=Lifecycle(tmp_path);op=TrustedOperator('tenant-acme','ops',True)
     with pytest.raises(PermissionError):life.deploy(op,'1')
-    life.catalog.register('tenant-acme','1','run1','lineage1');life.catalog.decide('tenant-acme','1','PROMOTION_APPROVED');life.deploy(op,'1')
-    life.catalog.register('tenant-acme','2','run2','lineage2');life.catalog.decide('tenant-acme','2','PROMOTION_APPROVED');life.deploy(op,'2')
+    tr,val,_=split(generate(seed=9,class_sep=3));run1,version1,_,validation1=track_and_register(tmp_path,train(tr),val)
+    assert promotion(validation1)=='PROMOTION_APPROVED'
+    life.catalog.register('tenant-acme',version1,run1,'dataset+pipeline');life.catalog.decide('tenant-acme',version1,'PROMOTION_APPROVED');life.deploy(op,version1)
+    tr,val,_=split(generate(seed=11,class_sep=3));run2,version2,_,validation2=track_and_register(tmp_path,train(tr),val)
+    assert promotion(validation2)=='PROMOTION_APPROVED'
+    life.catalog.register('tenant-acme',version2,run2,'dataset+pipeline');life.catalog.decide('tenant-acme',version2,'PROMOTION_APPROVED');life.deploy(op,version2)
     with pytest.raises(PermissionError):life.rollback(TrustedOperator('tenant-acme','bad',False))
-    assert life.rollback(op)[0]['active_version']=='1'
-    with pytest.raises(PermissionError):life.deploy(TrustedOperator('tenant-other','ops',True),'2')
+    assert life.rollback(op)[0]['active_version']==version1
+    with pytest.raises(PermissionError):life.deploy(TrustedOperator('tenant-other','ops',True),version2)
 def test_customer_contract_and_delayed_label_monitoring(tmp_path):
     import pytest
     data=generate();contract=ChurnData('tenant-acme',np.arange(len(data.y)),data.X,data.y,data.fingerprint);assert validate(contract)

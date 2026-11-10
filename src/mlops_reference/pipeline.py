@@ -32,10 +32,11 @@ class StaleManifest(RuntimeError): pass
 class Manifest:
     def __init__(self,path): self.path=Path(path)
     def read(self): return json.loads(self.path.read_text()) if self.path.exists() else {}
-    def write(self,record,expected_revision=None,inject_before_replace=False):
+    def write(self,record,expected_revision=None,inject_before_replace=False,locked=False):
         self.path.parent.mkdir(parents=True,exist_ok=True)
         with open(self.path.with_suffix('.lock'),'a+') as lock:
-            fcntl.flock(lock,fcntl.LOCK_EX); current=self.read(); revision=current.get('revision',0)
+            if not locked: fcntl.flock(lock,fcntl.LOCK_EX)
+            current=self.read(); revision=current.get('revision',0)
             if expected_revision is not None and revision!=expected_revision: raise StaleManifest('manifest revision changed')
             record={**record,'revision':revision+1}
             fd,tmp=tempfile.mkstemp(dir=self.path.parent,prefix='.manifest-',text=True)
@@ -46,19 +47,24 @@ class Manifest:
             except Exception:
                 if os.path.exists(tmp): os.unlink(tmp)
                 raise
-            finally: fcntl.flock(lock,fcntl.LOCK_UN)
+            finally:
+                if not locked: fcntl.flock(lock,fcntl.LOCK_UN)
         return record
     def deploy(self,tenant,version,key,expected_revision=None,inject_before_replace=False):
-        old=self.read()
-        if old.get('operation_key')==key:return old,False
-        record={'tenant_id':tenant,'active_version':version,'previous_version':old.get('active_version'),'operation_key':key}
-        return self.write(record,expected_revision,inject_before_replace),True
+        self.path.parent.mkdir(parents=True,exist_ok=True)
+        with open(self.path.with_suffix('.lock'),'a+') as lock:
+            fcntl.flock(lock,fcntl.LOCK_EX);old=self.read()
+            if old and old.get('tenant_id')!=tenant: raise PermissionError('cross-tenant manifest mutation')
+            if old.get('operation_key')==key:return old,False
+            record={'tenant_id':tenant,'active_version':version,'previous_version':old.get('active_version'),'operation_key':key}
+            return self.write(record,expected_revision,inject_before_replace,locked=True),True
     def rollback(self,tenant,key,authorized=False,expected_revision=None):
-        old=self.read()
-        if old.get('tenant_id')!=tenant or not authorized or not old.get('previous_version'): raise PermissionError('rollback not authorized')
-        if old.get('operation_key')==key:return old,False
-        record={'tenant_id':tenant,'active_version':old['previous_version'],'previous_version':old['active_version'],'operation_key':key}
-        return self.write(record,expected_revision),True
+        with open(self.path.with_suffix('.lock'),'a+') as lock:
+            fcntl.flock(lock,fcntl.LOCK_EX);old=self.read()
+            if old.get('tenant_id')!=tenant or not authorized or not old.get('previous_version'): raise PermissionError('rollback not authorized')
+            if old.get('operation_key')==key:return old,False
+            record={'tenant_id':tenant,'active_version':old['previous_version'],'previous_version':old['active_version'],'operation_key':key}
+            return self.write(record,expected_revision,locked=True),True
     def reconcile(self,audit,key):
         row=audit.get(key); current=self.read()
         if row and current.get('operation_key')==key:return 'RECONCILED'
