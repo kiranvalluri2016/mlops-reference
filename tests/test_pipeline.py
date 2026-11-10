@@ -55,6 +55,11 @@ def test_reconciliation_requires_completed_audit_and_registry_authority(tmp_path
     assert m.reconcile(a,'op',True)=='RECOVERY_REQUIRED'
     a.record('op','tenant-acme','DEPLOY','COMPLETED',{})
     assert m.reconcile(a,'op',False)=='RECOVERY_REQUIRED' and m.reconcile(a,'op',True)=='RECONCILED'
+def test_forged_catalog_approval_cannot_authorize_deploy(tmp_path):
+    import pytest
+    life=Lifecycle(tmp_path);op=TrustedOperator('tenant-acme','ops',True);tr,val,_=split(generate())
+    run,version,_,bad=track_and_register(tmp_path,train(tr),val);life.catalog.register('tenant-acme',version,run,'dataset+pipeline',bad)
+    with pytest.raises(PermissionError):life.deploy(op,version)
 def test_schema_and_class_coverage_rejected():
     import pytest
     with pytest.raises(AssertionError):split(generate(n=40))
